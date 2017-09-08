@@ -21,9 +21,19 @@ contract DPKI {
     event SignatureRevoked(address indexed signer, address indexed signedKey);
     event KeyRevoked(address indexed key);
 
-    function signKey(address key, uint expiry) {
+    function getSignature(address signer, uint index) public constant returns(address, uint) {
+        var signature = keys[signer].signatures[index];
+        return (signature.key, signature.expiry);
+    }
+
+    function getSignaturesLength(address signer) public constant returns(uint) {
+      return keys[signer].signatures.length;
+    }
+
+    function signKey(address key, uint expiry) public returns(address) {
         keys[msg.sender].signatures.push(Signature(key, expiry, 0x00))/*<--*/;
         SignatureAdded(msg.sender, key);
+        return key;
     }
 
     function revokeSignature(address signedKey) {
