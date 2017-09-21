@@ -23,8 +23,9 @@ def display_trusted_keys(args):
         print('signature={} (expires@{})'.format(key[0], key[1]))
 
 def trust(args):
-    contract.call({'from': account}).signKey(args.key, args.expiry)
-    tr = contract.transact({'from': account}).signKey(args.key, args.expiry)
+    address = str(args.address)
+    contract.call({'from': account}).signKey(address, args.expiry)
+    tr = contract.transact({'from': account}).signKey(address, args.expiry)
     return tr
 
 from OpenSSL import crypto
@@ -42,6 +43,12 @@ class SigningKey(_ECDSA_SigningKey):
 class VerifyingKey(_ECDSA_VerifyingKey):
 
     @classmethod
+    def from_cert_file(cls, certificate_file):
+        with open(certificate_file, 'rb') as pem:
+            cert = crypto.load_certificate(crypto.FILETYPE_PEM, pem.read())
+        return cls.from_cert(cert)
+
+    @classmethod
     def from_cert(cls, certificate):
         assert certificate.get_signature_algorithm().decode() == 'ecdsa-with-SHA256'
         pubkey = certificate.get_pubkey().to_cryptography_key()
@@ -55,6 +62,9 @@ class VerifyingKey(_ECDSA_VerifyingKey):
         keccak = sha3.keccak_256()
         keccak.update(self.to_string())
         return "0x{0}".format(keccak.hexdigest()[24:])
+
+    def __str__(self):
+        return self.to_address()
 
     # http://nullege.com/codes/show/src@b@i@bitmerchant-0.1.3@bitmerchant@wallet@keys.py/323/ecdsa.VerifyingKey.from_public_point
     @staticmethod
@@ -72,13 +82,7 @@ class VerifyingKey(_ECDSA_VerifyingKey):
         return _ECDSA_Point(SECP256k1.curve, x, y)
 
 def authenticate(args):
-    secp256k1 = crypto.get_elliptic_curve('secp256k1')
-
-    with open(args.cert, 'rb') as pem:
-        cert = crypto.load_certificate(crypto.FILETYPE_PEM, pem.read())
-
-    verifying_key = VerifyingKey.from_cert(cert)
-    address = verifying_key.to_address()
+    address = str(args.address)
     print("Authenticating {}...".format(address), end=' ')
     # TODO replace operator by generator
     import operator
@@ -86,7 +90,6 @@ def authenticate(args):
         raise UserWarning('%s is untrusted.' % address)
     print('Authenticated!')
     return True
-
 
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -100,11 +103,11 @@ account_group.add_argument('--account', help='eth account')
 #parser.add_argument("--account", action=AccountAction, default="coinbase", help="account")
 subparsers = parser.add_subparsers(help='sub-command help')
 parser_trust = subparsers.add_parser(name="trust", help="trust a secp256k1 public key")
-parser_trust.add_argument("key", help="key to trust")
+#parser_trust.add_argument("key", help="key to trust")
 parser_trust.add_argument("--expiry", default=2**256 - 1, help="expiry")
 parser_trust.set_defaults(func=trust)
 parser_auth = subparsers.add_parser(name="auth", help="authenticate a X.509 certificate")
-parser_auth.add_argument("cert", help="x.509 certificate to check")
+#parser_auth.add_argument("cert", help="x.509 certificate to check")
 parser_auth.set_defaults(func=authenticate)
 parser_distrust = subparsers.add_parser(name="distrust", help="revoke trust on a secp256k1 public key")
 parser_keys = subparsers.add_parser(name="list", help="display account trusted public keys")
@@ -112,6 +115,11 @@ parser_keys.set_defaults(func=display_trusted_keys)
 parser_keys = subparsers.add_parser(name="plot", help="plot the web of trust graph")
 parser_revoke = subparsers.add_parser(name="revoke", help="revoke your public key")
 parser_revoke.add_argument("--key", help="revocation key")
+for subparser in [parser_trust, parser_auth]:
+    key_group = subparser.add_mutually_exclusive_group()
+    key_group.add_argument('--address', help='eth address')
+    key_group.add_argument('--cert', dest='address', type=VerifyingKey.from_cert_file, help='X.509 certificate')
+
 args = parser.parse_args()
 web3 = args.web3
 if not args.account:
@@ -119,7 +127,7 @@ if not args.account:
 else:
     account = args.account
 
-print('Using account: %s' % account)
+print('Account: %s' % account)
 #coinbase = web3.eth.coinbase
 balance = web3.eth.getBalance(account)
 #print(balance)
@@ -129,12 +137,10 @@ with open('build/contracts/DPKI.json') as definition_f:
     definition = json.load(definition_f)
 
 abi = definition['abi']
-print(abi)
 
 contract = web3.eth.contract(abi=abi, address='0xcfeb869f69431e42cdb54a4f4f105c19c080a601')
-print('contract: %s' % contract)
+print('Contract: %s' % contract)
 
-print(args)
 if 'func' not in args:
     parser.print_help()
     sys.exit(0)
