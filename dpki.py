@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from web3 import Web3, HTTPProvider, IPCProvider
 import json
 import sys, io, time
@@ -10,6 +11,7 @@ def http_provider(endpoint_uri):
 
 def trusted_keys():
     keys = contract.call().keys(account)
+    # TODO use generated getter
     signatures_count = contract.call().getSignaturesLength(account)
 
     for i in range(signatures_count):
@@ -29,8 +31,13 @@ from OpenSSL import crypto
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from ecdsa import SigningKey, SECP256k1, VerifyingKey as _ECDSA_VerifyingKey
+from ecdsa import SigningKey as _ECDSA_SigningKey, SECP256k1, VerifyingKey as _ECDSA_VerifyingKey
 from ecdsa.ellipticcurve import Point as _ECDSA_Point
+
+import sha3
+
+class SigningKey(_ECDSA_SigningKey):
+    pass
 
 class VerifyingKey(_ECDSA_VerifyingKey):
 
@@ -45,7 +52,6 @@ class VerifyingKey(_ECDSA_VerifyingKey):
 
     # https://www.reddit.com/r/ethereum/comments/6pv1dx/how_to_generate_an_ethereum_wallet_the_hard_way/
     def to_address(self):
-        import sha3
         keccak = sha3.keccak_256()
         keccak.update(self.to_string())
         return "0x{0}".format(keccak.hexdigest()[24:])
@@ -72,14 +78,21 @@ def authenticate(args):
         cert = crypto.load_certificate(crypto.FILETYPE_PEM, pem.read())
 
     verifying_key = VerifyingKey.from_cert(cert)
-    print(verifying_key.to_address())
+    address = verifying_key.to_address()
+    print("Authenticating {}...".format(address), end=' ')
+    # TODO replace operator by generator
+    import operator
+    if address not in map(operator.itemgetter(0), trusted_keys()):
+        raise UserWarning('%s is untrusted.' % address)
+    print('Authenticated!')
+    return True
 
 
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("--json-rpc", default='http://localhost:8545', dest='web3', type=http_provider, help="web3 HTTP provider")
 account_group = parser.add_mutually_exclusive_group()
-account_group.add_argument('--coinbase', action='store_true')
+#account_group.add_argument('--coinbase', action='store_true')
 account_group.add_argument('--account', help='eth account')
 #parser.add_argument('--coinbase', dest='coinbase', action='store_true', help="use coinbase")
 #parser.set_defaults(coinbase=False)
@@ -90,7 +103,7 @@ parser_trust = subparsers.add_parser(name="trust", help="trust a secp256k1 publi
 parser_trust.add_argument("key", help="key to trust")
 parser_trust.add_argument("--expiry", default=2**256 - 1, help="expiry")
 parser_trust.set_defaults(func=trust)
-parser_auth = subparsers.add_parser(name="validate", help="authenticate a secp256k1 public key")
+parser_auth = subparsers.add_parser(name="auth", help="authenticate a X.509 certificate")
 parser_auth.add_argument("cert", help="x.509 certificate to check")
 parser_auth.set_defaults(func=authenticate)
 parser_distrust = subparsers.add_parser(name="distrust", help="revoke trust on a secp256k1 public key")
@@ -106,12 +119,11 @@ if not args.account:
 else:
     account = args.account
 
-print('args.account: %s' % args.account)
-print('args.coinbase: %s' % args.coinbase)
+print('Using account: %s' % account)
 #coinbase = web3.eth.coinbase
 balance = web3.eth.getBalance(account)
 #print(balance)
-print(web3.eth.blockNumber)
+print('Block number: %i' % web3.eth.blockNumber)
 
 with open('build/contracts/DPKI.json') as definition_f:
     definition = json.load(definition_f)
