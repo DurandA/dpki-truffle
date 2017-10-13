@@ -2,12 +2,40 @@
 from web3 import Web3, HTTPProvider, IPCProvider
 import json
 import sys, io, time
-import argparse
+import argparse, functools
 import six
+
 
 def http_provider(endpoint_uri):
     web3 = Web3(HTTPProvider(endpoint_uri))
     return web3
+
+def eth_address(source):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(args, *argv, **kwargs):
+            if callable(source):
+                address = source(args)
+            else:
+                address = getattr(args, source)
+            # TODO check that it is a valid address
+            func(str(address), args, *argv, **kwargs)
+        return wrapper
+    return decorator
+
+def ipfsapi(*connect_args, **connect_kwargs):
+    def decorator(func):
+        import ipfsapi as _ipfsapi
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            api = _ipfsapi.connect(*connect_args, **connect_kwargs)
+            func(api, *args, **kwargs)
+        return wrapper
+    return decorator
+
+def display_trusted_keys(args):
+    for key in trusted_keys():
+        print('signature={} (expires@{})'.format(key[0], key[1]))
 
 def trusted_keys():
     keys = contract.call().keys(account)
@@ -18,15 +46,35 @@ def trusted_keys():
         signature = contract.call().getSignature(account, i)
         yield signature
 
-def display_trusted_keys(args):
-    for key in trusted_keys():
-        print('signature={} (expires@{})'.format(key[0], key[1]))
-
-def trust(args):
-    address = str(args.address)
+@eth_address('address')
+#@eth_address(lambda args: args.address)
+def trust(address, args):
+    #address = str(args.address)
     contract.call({'from': account}).signKey(address, args.expiry)
     tr = contract.transact({'from': account}).signKey(address, args.expiry)
     return tr
+
+@eth_address('revoke_address')
+@ipfsapi('127.0.0.1', 5001)
+def add_cert(api, revoke_address, args):
+    from base58 import decode as b58decode
+    # TODO check that it match the account address and it is a valid certificate
+    multihash = api.block_put(args.cert)['Key']
+    multihash_bytes = b58decode(multihash)
+    hash_uint256 = int.from_bytes(multihash_bytes[2:], byteorder='big') # prefixed with 0x1220 https://ethereum.stackexchange.com/a/17112
+    contract.call({'from': account}).publish(hash_uint256, revoke_address)
+    tr = contract.transact({'from': account}).publish(hash_uint256, revoke_address)
+    return tr
+
+@eth_address('address')
+@ipfsapi('127.0.0.1', 5001)
+def get_cert(api, address, args):
+    from base58 import encode as b58encode
+    revoke_address, hash_uint256 = contract.call().keys(address)
+    multihash_bytes = b'\x12\x20' + hash_uint256.to_bytes(32, byteorder='big')
+    multihash = b58encode(multihash_bytes)
+    cert = api.block_get(multihash)
+    print(cert.decode('utf-8'))
 
 from OpenSSL import crypto
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -112,7 +160,19 @@ parser_auth.set_defaults(func=authenticate)
 parser_distrust = subparsers.add_parser(name="distrust", help="revoke trust on a secp256k1 public key")
 parser_keys = subparsers.add_parser(name="list", help="display account trusted public keys")
 parser_keys.set_defaults(func=display_trusted_keys)
-parser_keys = subparsers.add_parser(name="plot", help="plot the web of trust graph")
+
+parser_register = subparsers.add_parser(name="add", help="register your X.509 certificate")
+parser_register.add_argument('--cert', type=argparse.FileType('rb') , help='X.509 certificate (saved on IPFS)')
+key_group = parser_register.add_mutually_exclusive_group()
+key_group.add_argument('--revoke-address', help='revocation eth address')
+key_group.add_argument('--revoke-cert', dest='revoke_address', type=VerifyingKey.from_cert_file, help='revocation X.509 certificate')
+parser_register.set_defaults(func=add_cert)
+
+parser_get = subparsers.add_parser(name="get", help="get X.509 certificate from address")
+parser_get.add_argument('--address', help='eth address')
+parser_get.set_defaults(func=get_cert)
+
+parser_plot = subparsers.add_parser(name="plot", help="plot the web of trust graph")
 parser_revoke = subparsers.add_parser(name="revoke", help="revoke your public key")
 parser_revoke.add_argument("--key", help="revocation key")
 for subparser in [parser_trust, parser_auth]:

@@ -3,6 +3,9 @@ pragma solidity ^0.4.15;
 contract DPKI {
     struct Signer {
         address revocationKey;
+        uint certBlockHash; /* IPFS certificate block hash stored in 32 bytes
+                               see https://ethereum.stackexchange.com/a/6862
+                            */
         Signature[] signatures;
     }
 
@@ -27,7 +30,15 @@ contract DPKI {
     }
 
     function getSignaturesLength(address signer) public constant returns(uint) {
-      return keys[signer].signatures.length;
+        return keys[signer].signatures.length;
+    }
+
+    function publish(uint certBlockHash, address revocationKey) {
+        require (keys[msg.sender].certBlockHash == 0);
+        require (keys[msg.sender].revocationKey == 0);
+
+        keys[msg.sender].certBlockHash = certBlockHash;
+        keys[msg.sender].revocationKey = revocationKey;
     }
 
     function signKey(address key, uint expiry) public returns(address) {
